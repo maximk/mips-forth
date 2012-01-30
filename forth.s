@@ -21,6 +21,8 @@ done_msg:
 		.asciiz	"Done\n"
 stack_empty:
 		.asciiz	"\n?STACK\n"
+digit_to_char:
+		.ascii	"0123456789abcdefghijklmnopqrstuvwxyz"
 
 #------------------------------------------------------------------------------
 # Forth vocabulary
@@ -462,8 +464,96 @@ d_base:
 		.ascii	"base"
 
 		.align	2
-		.word	0
+		.word	d_digit
 		.word	c_base
+
+d_digit:
+		.byte	5
+		.ascii	"digit"
+
+		.align	2
+		.word	d_int_do
+		.word	c_digit
+
+d_int_do:
+		.byte	4
+		.ascii	"(do)"
+
+		.align	2
+		.word	d_i
+		.word	c_int_do
+
+d_i:
+		.byte	1
+		.ascii	"i"
+
+		.align	2
+		.word	d_alpha
+		.word	c_i
+
+d_alpha:
+		.byte	5
+		.ascii	"alpha"
+
+		.align	2
+		.word	d_int_loop
+		.word	c_alpha
+
+d_int_loop:
+		.byte	6
+		.ascii	"(loop)"
+
+		.align	2
+		.word	d_2_drop
+		.word	c_int_loop
+
+d_2_drop:
+		.byte	5
+		.ascii	"2drop"
+
+		.align	2
+		.word	d_rdrop
+		.word	c_2_drop
+
+d_rdrop:
+		.byte	5
+		.ascii	"rdrop"
+
+		.align	2
+		.word	d_um_star
+		.word	c_rdrop
+
+d_um_star:
+		.byte	3
+		.ascii	"um*"
+
+		.align	2
+		.word	d_d_plus
+		.word	c_um_star
+
+d_d_plus:
+		.byte	2
+		.ascii	"d+"
+
+		.align	2
+		.word	d_literal
+		.word	c_d_plus
+
+d_literal:
+		.byte	135
+		.ascii	"literal"
+
+		.align	2
+		.word	d_state
+		.word	c_literal
+
+d_state:
+		.byte	5
+		.ascii	"state"
+
+		.align	2
+		.word	0
+		.word	c_state
 
 init_here:
 		.space	65536
@@ -577,6 +667,7 @@ c_expect:
 #    ELSE DROP [COMPILE] LITERAL THEN THEN ?STACK AGAIN ;
 #
 single_word:
+		jal		c_drop			# DROP
 		jal		c_literal		# LITERAL
 
 check_stack:
@@ -1506,10 +1597,10 @@ c_convert_1:
 		j		c_convert_loop
 
 c_convert:
-		subu	$sp, 4
+		subu	$sp, 4		# c_convert
 		sw		$ra, 0($sp)
 
-c_conver_loop:
+c_convert_loop:
 		jal		c_inc
 		jal		c_dup
 		jal		c_more_r
@@ -1537,6 +1628,7 @@ c_conver_loop:
 		jal		c_if_branch
 		.word	c_convert_1
 
+		jal		c_dpl
 		jal		c_inc_set
 		jal		c_r_more
 		j		c_convert_loop
@@ -1552,8 +1644,12 @@ c_base:
 
 # : DIGIT ( C,N1->N2,TF/FF)  0 ROT ROT 0
 #   DO I ALPHA OVER = IF 2DROP I -1 0 LEAVE THEN LOOP DROP ;
+
+c_digit_0:
+		j		c_digit_1
+
 c_digit:
-		subu	$sp, 4
+		subu	$sp, 4		# c_digit
 		sw		$ra, 0($sp)
 
 		jal		c_lit
@@ -1562,9 +1658,156 @@ c_digit:
 		jal		c_rot
 		jal		c_lit
 		.word	0
+		jal		c_int_do
+c_digit_loop:
+		jal		c_i
+		jal		c_alpha
+		jal		c_over
+		jal		c_equal
+		jal		c_if_branch
+		.word	c_digit_0
 
-		...
-	
+		jal		c_2_drop
+		jal		c_i
+		jal		c_lit
+		.word	-1
+		jal		c_lit
+		.word	0
+
+#
+# XXX: how leave is implemented?
+#
+		jal		c_rdrop
+		jal		c_rdrop
+		j		c_digit_break
+
+c_digit_1:
+		jal		c_int_loop
+		.word	c_digit_loop
+c_digit_break:
+		jal		c_drop
+		j		next
+
+# (DO)
+c_int_do:
+		la		$t1, data_stack
+		add		$t1, 8
+		bltu	$fp, $t1, abort_data_stack
+
+		lw		$t0, -4($fp)	# index
+		lw		$t1, -8($fp)	# limit
+		subu	$fp, 8
+
+		subu	$sp, 8
+		sw		$t0, 0($sp)
+		sw		$t1, 4($sp)
+		jr		$ra
+
+# I
+c_i:
+		j		c_r_at
+
+# ALPHA
+c_alpha:
+		la		$t1, data_stack		# c_alpha
+		bleu	$fp, $t1, abort_data_stack
+
+		lw		$t0, -4($fp)
+		lbu		$t0, digit_to_char($t0)
+		sw		$t0, -4($fp)
+		jr		$ra
+
+# (LOOP)
+c_int_loop:
+		lw		$t0, 0($sp)		# index
+		lw		$t1, 4($sp)		# limit
+
+		add		$t0, 1
+		bge		$t0, $t1, c_int_loop_break
+
+		sw		$t0, 0($sp)
+		
+		lw		$s0, 0($ra)
+		jr		$s0
+
+c_int_loop_break:
+		addu	$sp, 8
+		jr		$ra
+
+# : 2DROP DROP DROP ;
+c_2_drop:
+		subu	$sp, 4
+		sw		$ra, 0($sp)
+
+		jal		c_drop
+		jal		c_drop
+		j		next
+
+# RDROP
+c_rdrop:
+		addu	$sp, 4
+		jr		$ra
+
+# UM*
+c_um_star:
+		la		$t1, data_stack
+		addu	$t1, 8
+		bltu	$fp, $t1, abort_data_stack
+
+		lw		$t0, -4($fp)
+		lw		$t1, -8($fp)
+		multu	$t0, $t1
+		mfhi	$t0		
+		mflo	$t1
+		sw		$t0, -4($fp)
+		sw		$t1, -8($fp)
+		jr		$ra
+
+# D+
+c_d_plus:
+		la		$t1, data_stack		# D+
+		addu	$t1, 16
+		bltu	$fp, $t1, abort_data_stack
+
+		lw		$t0, -4($fp)	# BH
+		lw		$t1, -8($fp)	# BL
+		lw		$t2, -12($fp)	# AH
+		lw		$t3, -16($fp)	# AL
+		subu	$fp, 8
+
+#
+# XXX: integer overflow ignored
+#
+		add		$t1, $t1, $t3
+		add		$t0, $t0, $t2
+
+		sw		$t0, -4($fp)
+		sw		$t1, -8($fp)
+		jr		$ra
+
+# : LITERAL   ( W->) STATE @ IF COMPILE LIT , THEN ; IMMEDIATE
+c_literal:
+		subu	$sp, 4
+		sw		$ra, 0($sp)
+
+		jal		c_state
+		jal		c_at
+		jal		c_if_branch
+		.word	next
+
+		jal		c_compile
+		.word	c_lit
+		jal		c_comma
+		j		next	
+
+# VARIABLE STATE
+c_state:
+		subu	$sp, 4
+		sw		$ra, 0($sp)
+
+		jal		c_create_hash
+		.word	next
+		.word	0
 
 #------------------------------------------------------------------------------
 #
